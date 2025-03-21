@@ -1,81 +1,82 @@
-from flask import Flask, request, jsonify, send_file
-import pandas as pd
+from flask import Flask, request, jsonify
 import re
+import pdfminer.high_level
+from werkzeug.utils import secure_filename
 import os
-from PyPDF2 import PdfReader
-from docx import Document
+import docx
 
 app = Flask(__name__)
 
+# Allowed file extensions
+ALLOWED_EXTENSIONS = {"pdf", "docx"}
+
+# Function to check file extension
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
 # Function to extract text from PDF
 def extract_text_from_pdf(pdf_path):
-    text = ""
-    with open(pdf_path, "rb") as file:
-        pdf = PdfReader(file)
-        for page in pdf.pages:
-            text += page.extract_text() + "\n"
-    return text
+    return pdfminer.high_level.extract_text(pdf_path)
 
 # Function to extract text from DOCX
 def extract_text_from_docx(docx_path):
-    text = ""
-    doc = Document(docx_path)
-    for para in doc.paragraphs:
-        text += para.text + "\n"
-    return text
+    doc = docx.Document(docx_path)
+    return "\n".join([para.text for para in doc.paragraphs])
 
-# Function to extract name, email, and phone number
-def extract_contact_details(text):
-    email_pattern = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
-    phone_pattern = r"\+?\d[\d -]{8,14}\d"
+# Function to extract contact details (name, email, phone)
+def extract_contact_info(text):
+    email_pattern = r"[a-zA-Z0-9+_.-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]+"
+    phone_pattern = r"\+?\d[\d -]{8,12}\d"
 
     emails = re.findall(email_pattern, text)
     phones = re.findall(phone_pattern, text)
 
-    name = text.split("\n")[0]  # Assuming first line is name
-
     return {
-        "Name": name.strip(),
-        "Email": emails[0] if emails else "Not Found",
-        "Phone": phones[0] if phones else "Not Found"
+        "name": text.split("\n")[0],  # Assume first line is the name (improve as needed)
+        "emails": emails if emails else "Not found",
+        "phones": phones if phones else "Not found",
     }
 
-@app.route("/")
-def home():
-    return "Resume Parser API is running!"
-
-@app.route("/upload", methods=["POST"])
-def upload_file():
+# Resume parser route
+@app.route("/parse", methods=["POST"])
+def parse_resume():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
-    
+
     file = request.files["file"]
-    
+
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
 
-    file_ext = file.filename.split(".")[-1].lower()
-    temp_path = f"temp.{file_ext}"
-    file.save(temp_path)
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Invalid file type"}), 400
 
-    if file_ext == "pdf":
-        text = extract_text_from_pdf(temp_path)
-    elif file_ext == "docx":
-        text = extract_text_from_docx(temp_path)
+    filename = secure_filename(file.filename)
+    filepath = os.path.join("/tmp", filename)  # Save to temporary directory
+    file.save(filepath)
+
+    # Extract text based on file type
+    if filename.endswith(".pdf"):
+        extracted_text = extract_text_from_pdf(filepath)
+    elif filename.endswith(".docx"):
+        extracted_text = extract_text_from_docx(filepath)
     else:
-        return jsonify({"error": "Unsupported file format. Use PDF or DOCX."}), 400
+        return jsonify({"error": "Unsupported file format"}), 400
 
-    os.remove(temp_path)  # Clean up temp file
+    # Extract contact details
+    contact_info = extract_contact_info(extracted_text)
 
-    # Extract details
-    details = extract_contact_details(text)
+    return jsonify({
+        "message": "Resume processed successfully",
+        "name": contact_info["name"],
+        "email": contact_info["emails"],
+        "phone": contact_info["phones"]
+    })
 
-    # Save to Excel
-    df = pd.DataFrame([details])
-    excel_path = "output.xlsx"
-    df.to_excel(excel_path, index=False)
-
-    return send_file(excel_path, as_attachment=True)
+# Root route (for testing)
+@app.route("/", methods=["GET"])
+def home():
+    return "Resume Parser API is running!"
 
 if __name__ == "__main__":
     app.run(debug=True)
