@@ -1,6 +1,5 @@
-flask
-gunicorn
-pandas
-openpyxl
-PyPDF2
+Flask
+pdfminer.six
 python-docx
+werkzeug
+gunicorn
